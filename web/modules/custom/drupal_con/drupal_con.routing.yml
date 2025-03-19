@@ -1,0 +1,9 @@
+# module routes
+drupal_con.index:
+  path: '/welcome'
+  defaults:
+    _controller: '\Drupal\drupal_con\Controller\DemoController::index'
+    _title: 'Welcome to DrupalCon Atlanta 2025!'
+  methods: [GET]
+  requirements:
+    _permission: 'access content'

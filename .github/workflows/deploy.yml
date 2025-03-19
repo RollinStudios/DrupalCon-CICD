@@ -1,0 +1,187 @@
+name: Drupal CI/CD Pipeline
+on:
+  push:
+    branches: [ main, develop, staging ]
+  pull_request:
+    branches: [ develop ]
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          tools: composer:v2
+
+      - name: Get Composer Cache Directory
+        id: composer-cache
+        run: echo "dir=$(composer config cache-files-dir)" >> $GITHUB_OUTPUT
+
+      - name: Cache Composer dependencies
+        uses: actions/cache@v3
+        with:
+          path: ${{ steps.composer-cache.outputs.dir }}
+          key: ${{ runner.os }}-composer-${{ hashFiles('**/composer.lock') }}
+          restore-keys: ${{ runner.os }}-composer-
+
+      - name: Install Dependencies
+        run: composer install --no-progress
+
+      - name: Install Drupal Coder
+        run: |
+          composer global config --no-plugins allow-plugins.dealerdirect/phpcodesniffer-composer-installer true
+          composer global require drupal/coder
+          composer global require dealerdirect/phpcodesniffer-composer-installer
+          composer global require slevomat/coding-standard
+
+      - name: Register Drupal and DrupalPractice Standards
+        run: |
+          export COMPOSER_HOME=$(composer config --global home)
+          phpcs --config-set installed_paths $COMPOSER_HOME/vendor/drupal/coder/coder_sniffer,$COMPOSER_HOME/vendor/slevomat/coding-standard
+          phpcs -i
+
+      - name: Run PHPCS with Drupal Standards
+        run: |
+          phpcs --standard=Drupal,DrupalPractice \
+          --extensions=php,module,inc,install,test,profile,theme,css,info,txt,md,yml \
+          --ignore=node_modules,bower_components,vendor \
+          web/modules/custom
+
+      - name: Install and Run PHPStan
+        run: |
+          composer require --dev phpstan/phpstan
+          ./vendor/bin/phpstan analyse web/modules/custom --level=1
+
+  security:
+    needs: quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          tools: composer:v2
+
+      - name: Get Composer Cache Directory
+        id: composer-cache
+        run: echo "dir=$(composer config cache-files-dir)" >> $GITHUB_OUTPUT
+
+      - name: Cache Composer dependencies
+        uses: actions/cache@v3
+        with:
+          path: ${{ steps.composer-cache.outputs.dir }}
+          key: ${{ runner.os }}-composer-${{ hashFiles('**/composer.lock') }}
+          restore-keys: ${{ runner.os }}-composer-
+
+      - name: Install Dependencies
+        run: composer install --no-progress
+
+      - name: Security Check
+        run: composer audit
+
+      - name: Fix Archive TAR Test Files
+        run: |
+          # Remove or fix the problematic TAR test files that cause extraction errors
+          find . -name "hamidTARtester2.tar" -type f -delete || true
+
+      - name: OWASP Dependency Check
+        uses: dependency-check/Dependency-Check_Action@main
+        with:
+          project: 'drupal/recommended-project'
+          path: '.'
+          format: 'HTML'
+          out: './reports'
+          args: >
+            --failOnCVSS 9
+            --disableYarnAudit
+            --disableNodeJS
+            --disableArchive
+            --disableRetireJS
+        env:
+          COMPOSER_PROCESS_TIMEOUT: 0
+          COMPOSER_NO_INTERACTION: 1
+
+
+      - name: Upload OWASP results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dependency-check-report
+          path: reports/owasp.json
+          retention-days: 30
+
+  accessibility:
+    needs: security
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          npm install -g pa11y-ci
+
+      - name: Create Pa11y config
+        run: |
+          cat > .pa11yci.json << 'EOL'
+          {
+            "urls": ["${{secrets.STAGING_URL}}"],
+            "reporters": ["json"]
+          }
+          EOL
+
+      - name: Run Pa11y CI
+        run: |
+          PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
+          PUPPETEER_EXECUTABLE_PATH=$(which google-chrome-stable || which chromium-browser || which chromium) \
+          NODE_OPTIONS="--max-old-space-size=4096" \
+          PUPPETEER_SKIP_DOWNLOAD=true \
+          pa11y-ci --config .pa11yci.json > pa11y-report.json
+        env:
+          CI: true
+          PUPPETEER_ARGS: '--no-sandbox --disable-setuid-sandbox'
+
+      - name: Upload Pa11y report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pa11y-report
+          path: reports/pa11y-report.json
+
+
+  notify-failure:
+    needs: [ quality, security, accessibility ]
+    if: failure()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Send email notification
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{secrets.SMTP_SERVER}}
+          server_port: 587
+          username: ${{secrets.SMTP_USERNAME}}
+          password: ${{secrets.SMTP_PASSWORD}}
+          subject: "⚠️ Pipeline failure notification"
+          body: |
+            A pipeline failure has occurred in ${{ github.repository }}.
+
+            Branch: ${{ github.ref_name }}
+
+            Details:
+            - Workflow: ${{ github.workflow }}
+            - Run URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            Please review the pipeline logs and fix any issues.
+
+          to: sam@rollin.org
+          from: Rollin inc. <info@rollin.org>
