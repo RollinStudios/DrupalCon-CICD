@@ -33,7 +33,7 @@ The workflow consists of three main jobs:
 
 To use this pipeline in your own Drupal project:
 
-1. Copy the `.github/workflows/drupal-cicd.yml` file to your repository
+1. Copy the `.github/workflows/deploy.yml` file to your repository
 2. Configure the following GitHub secrets:
   - `STAGING_URL`: URL of your staging environment
   - `SMTP_SERVER`: SMTP server for email notifications
@@ -63,14 +63,14 @@ These reports can be downloaded from the GitHub Actions run page.
 
 For more information about this demonstration and automated deploy pipelines for Drupal:
 
-- [Presentation Slides](https://example.com/slides) (Link will be available after the presentation)
+- [Presentation Slides](https://speakerdeck.com/rollinstudios/from-manual-to-magical-our-pipeline-revamp) (Link will be available after the presentation)
 
 ## Contact
 
 For questions or further information about this demonstration:
 
 - Samuel Rollin - sam@rollin.org
-- Haylee Millar - Platform.sh
+- Haylee Millar - haylee.millar@platform.sh
 
 ## License
 
